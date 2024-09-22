@@ -3,7 +3,7 @@ import { client } from "../api/client";
 import { mkdir, writeFile } from "fs/promises";
 import { join } from "path";
 import parseToC, { ParsedToC } from "./parseToC";
-import { Page } from "playwright";
+import { Download, Page } from "playwright";
 import { Manual } from "..";
 
 export default async function downloadGenericManual(
@@ -62,6 +62,7 @@ async function recursivelyDownloadManual(
   toc: ParsedToC
 ) {
   const exploded = Object.entries(toc);
+    
 
   for (const explIdx in exploded) {
     const [name, value] = exploded[explIdx];
@@ -69,25 +70,51 @@ async function recursivelyDownloadManual(
     if (typeof value === "string") {
       const sanitizedName = name.replace(/\//g, "-");
       const sanitizedPath = `${join(path, sanitizedName)}.pdf`;
-      console.log(`Downloading page ${sanitizedName}...`);
+      const url = `https://techinfo.toyota.com${value}`;
+      console.log(`Downloading page ${sanitizedName}... (URL: ${url})`);
 
       // download page
       try {
-        await page.goto(`https://techinfo.toyota.com${value}`, {
-          waitUntil: "load",
+        // wait for either download or load event, whichever comes first, for some reason headless doesn't trigger load event on PDFs
+        const eventPromise = Promise.any([
+          page.waitForEvent("load"),
+          page.waitForEvent("download"),
+        ]);
+        // navigate to page
+        await page.goto(url, { waitUntil: "commit" });
+        const event = await eventPromise;
+
+        // get content url
+        const contentUrl = await page.evaluate(() => {
+          return document.URL;
         });
-        await page.addScriptTag({
-          content: `document.querySelector(".footer").remove()`,
+
+        // get content type
+        const contentType = await page.evaluate(() => {
+          return document.contentType;
         });
-        await page.pdf({
-          path: sanitizedPath,
-          margin: {
-            top: 1,
-            right: 1,
-            bottom: 1,
-            left: 1,
-          },
-        });
+        console.log(`URL: ${contentUrl}, type: ${contentType}`);
+
+        // if content url ends in .pdf, load that url and download it (for some reason the first goto doesn't follow the redirects all the way to the PDF)
+        if (contentUrl.endsWith(".pdf")) {
+          const downloadPromise = page.waitForEvent('download');
+          await page.goto(contentUrl, { waitUntil: "commit" });
+          const download = await downloadPromise;
+          await download.saveAs(sanitizedPath);
+        } else {
+          await page.addScriptTag({
+            content: `document.querySelector(".footer").remove()`,
+          });
+          await page.pdf({
+            path: sanitizedPath,
+            margin: {
+              top: 1,
+              right: 1,
+              bottom: 1,
+              left: 1,
+            },
+          });
+        }
       } catch (e) {
         console.error(`Error saving page ${name}: ${e}`);
         continue;
