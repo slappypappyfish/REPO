@@ -172,7 +172,7 @@ async function run({manual, email, password, headed, cookieString}: CLIArgs) {
   }
 
   const page = await browser.newPage({
-    acceptDownloads: false,
+    acceptDownloads: true,
     storageState: {
       // add cookies to browser
       cookies: transformedCookies,
